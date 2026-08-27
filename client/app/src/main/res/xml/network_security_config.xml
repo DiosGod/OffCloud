@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Tailscale asigna IPs en el rango CGNAT 100.64.0.0/10. Permitimos tráfico
+  HTTP sin cifrar SOLO dentro de ese rango (la VPN ya cifra el túnel por
+  fuera), y seguimos bloqueando cleartext hacia cualquier otro destino.
+  Nota: Android no soporta rangos CIDR aquí directamente, así que si tu
+  servidor cambia de IP dentro del rango, actualiza el domain de abajo.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">100.119.30.85</domain>
+    </domain-config>
+</network-security-config>

@@ -9,7 +9,7 @@ está subido sin tener que volver a mandarlo.
 ```bash
 cd host
 python3 -m venv venv
-source venv/bin/activate
+venv/Script/activate.bat
 pip install -r requirements.txt
 
 cp .env.example .env
@@ -38,7 +38,7 @@ curl http://127.0.0.1:8000/health
 
 # Login
 curl -X POST http://127.0.0.1:8000/auth/login \
-  -d "username=tu_usuario&password=tu_password" \
+  -d "username=dsousa&password=0hq#A7lxQ%6oy5pS6Ca$bR&kUEa2" \
   -H "Content-Type: application/x-www-form-urlencoded"
 
 # Upload (con el token que te devolvió el login, o el de .env)

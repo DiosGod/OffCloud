@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OffCloud Admin</title>
+<style>
+  :root {
+    --bg-dark: #0d0b14;
+    --surface: #1a1625;
+    --surface-2: #221c30;
+    --border: #2e2740;
+    --accent: #a855f7;
+    --accent-hover: #9333ea;
+    --accent-soft: #c4b5fd;
+    --text: #f5f3fa;
+    --text-muted: #9b93ac;
+    --error: #f87171;
+    --success: #4ade80;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: linear-gradient(135deg, #241340, #0d0b14 55%, #160b24);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  /* --- Pantalla de login --- */
+  #loginScreen {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
+  .login-card {
+    width: 100%;
+    max-width: 360px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 36px 32px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+  }
+
+  .login-card h1 {
+    font-size: 26px;
+    font-weight: 800;
+    color: var(--accent-soft);
+    letter-spacing: 0.5px;
+    margin: 0 0 4px;
+  }
+
+  .login-card p.subtitle {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin: 0 0 24px;
+  }
+
+  /* --- Dashboard --- */
+  #dashboard { display: none; max-width: 960px; margin: 0 auto; padding: 32px 24px 64px; }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 32px;
+  }
+
+  .topbar h1 {
+    font-size: 22px;
+    font-weight: 800;
+    color: var(--accent-soft);
+    margin: 0;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    margin-bottom: 24px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.25);
+  }
+
+  .card h2 {
+    font-size: 15px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-muted);
+    margin: 0 0 16px;
+    font-weight: 600;
+  }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 8px; font-size: 14px; }
+  th { color: var(--text-muted); font-weight: 500; border-bottom: 1px solid var(--border); }
+  tbody tr { border-bottom: 1px solid var(--border); }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: rgba(168, 85, 247, 0.06); }
+
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .badge.admin { background: rgba(168, 85, 247, 0.2); color: var(--accent-soft); }
+  .badge.user { background: rgba(155, 147, 172, 0.15); color: var(--text-muted); }
+
+  input {
+    width: 100%;
+    background: var(--surface-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 11px 14px;
+    border-radius: 10px;
+    font-size: 14px;
+    margin-bottom: 14px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  input:focus { border-color: var(--accent); }
+
+  .form-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
+  .form-row input { margin-bottom: 0; flex: 1; min-width: 140px; }
+
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    transition: background 0.15s, opacity 0.15s;
+  }
+  button:hover { background: var(--accent-hover); }
+  button.secondary {
+    background: transparent;
+    color: var(--accent-soft);
+    border: 1px solid var(--border);
+  }
+  button.secondary:hover { background: rgba(168,85,247,0.08); }
+  button.danger { background: transparent; color: var(--error); padding: 6px 12px; font-size: 13px; }
+  button.danger:hover { background: rgba(248,113,113,0.1); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.full { width: 100%; }
+
+  label.checkbox {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--text-muted); cursor: pointer;
+  }
+  label.checkbox input { width: auto; margin: 0; }
+
+  .msg { font-size: 13px; margin-top: 10px; min-height: 18px; }
+  .msg.error { color: var(--error); }
+  .msg.success { color: var(--success); }
+
+  .empty-state { color: var(--text-muted); font-size: 13px; padding: 12px 0; }
+</style>
+</head>
+<body>
+
+  <!-- Pantalla de login -->
+  <div id="loginScreen">
+    <div class="login-card">
+      <h1>OffCloud</h1>
+      <p class="subtitle">Panel de administración</p>
+
+      <input id="loginUsername" placeholder="Usuario" autocomplete="username">
+      <input id="loginPassword" placeholder="Contraseña" type="password" autocomplete="current-password">
+      <button class="full" onclick="doLogin()">Entrar</button>
+      <p id="loginMsg" class="msg error"></p>
+    </div>
+  </div>
+
+  <!-- Dashboard -->
+  <div id="dashboard">
+    <div class="topbar">
+      <h1>OffCloud — Admin</h1>
+      <button class="secondary" onclick="logout()">Cerrar sesión</button>
+    </div>
+
+    <div class="card">
+      <h2>Usuarios</h2>
+      <table id="usersTable">
+        <thead><tr><th>Usuario</th><th>Rol</th><th>Fotos</th><th>Creado</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+
+      <div class="form-row">
+        <input id="newUsername" placeholder="Usuario nuevo">
+        <input id="newPassword" placeholder="Contraseña" type="password">
+        <label class="checkbox"><input id="newIsAdmin" type="checkbox"> Admin</label>
+        <button onclick="createUser()">Crear usuario</button>
+      </div>
+      <p id="userMsg" class="msg"></p>
+    </div>
+
+    <div class="card">
+      <h2>Fotos</h2>
+      <table id="photosTable">
+        <thead><tr><th>Usuario</th><th>Archivo</th><th>Tamaño</th><th>Subida</th><th>Tomada</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <p id="photosEmpty" class="empty-state" style="display:none">Aún no hay fotos.</p>
+    </div>
+  </div>
+
+<script>
+function getToken() { return localStorage.getItem('offcloud_admin_token'); }
+function setToken(t) { localStorage.setItem('offcloud_admin_token', t); }
+function clearToken() { localStorage.removeItem('offcloud_admin_token'); }
+
+function showLogin(message) {
+  document.getElementById('dashboard').style.display = 'none';
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('loginMsg').textContent = message || '';
+}
+function showDashboard() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('dashboard').style.display = 'block';
+}
+
+async function doLogin() {
+  const username = document.getElementById('loginUsername').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const msgEl = document.getElementById('loginMsg');
+  msgEl.textContent = '';
+  if (!username || !password) {
+    msgEl.textContent = 'Rellena usuario y contraseña.';
+    return;
+  }
+  try {
+    const res = await fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username, password })
+    });
+    if (!res.ok) {
+      msgEl.textContent = 'Usuario o contraseña incorrectos.';
+      return;
+    }
+    const data = await res.json();
+    if (!data.is_admin) {
+      msgEl.textContent = 'Este usuario no tiene permisos de administrador.';
+      return;
+    }
+    setToken(data.token);
+    showDashboard();
+    loadAll();
+  } catch (e) {
+    msgEl.textContent = 'No se pudo conectar con el server.';
+  }
+}
+
+function logout() {
+  clearToken();
+  document.getElementById('loginPassword').value = '';
+  showLogin('');
+}
+
+async function api(path, options = {}) {
+  const token = getToken();
+  const res = await fetch(path, {
+    ...options,
+    headers: { ...(options.headers || {}), 'Authorization': 'Bearer ' + token }
+  });
+  if (res.status === 401 || res.status === 403) {
+    clearToken();
+    showLogin('Tu sesión expiró o no tienes permisos. Inicia sesión de nuevo.');
+    throw new Error('unauthorized');
+  }
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  return res.status === 204 ? null : res.json();
+}
+
+async function loadAll() {
+  try {
+    const users = await api('/admin/users');
+    const utbody = document.querySelector('#usersTable tbody');
+    utbody.innerHTML = '';
+    users.forEach(u => {
+      const roleBadge = u.is_admin
+        ? '<span class="badge admin">admin</span>'
+        : '<span class="badge user">usuario</span>';
+      utbody.innerHTML += `<tr>
+        <td>${u.username}</td>
+        <td>${roleBadge}</td>
+        <td>${u.photo_count}</td>
+        <td>${formatDate(u.created_at)}</td>
+        <td><button class="danger" onclick="deleteUser(${u.id}, '${u.username}', ${u.photo_count})">Borrar</button></td>
+      </tr>`;
+    });
+
+    const photos = await api('/admin/photos');
+    const ptbody = document.querySelector('#photosTable tbody');
+    ptbody.innerHTML = '';
+    document.getElementById('photosEmpty').style.display = photos.length ? 'none' : 'block';
+    photos.forEach(p => {
+      ptbody.innerHTML += `<tr>
+        <td>${p.owner_username}</td>
+        <td>${p.filename}</td>
+        <td>${(p.size_bytes/1024).toFixed(1)} KB</td>
+        <td>${formatDate(p.uploaded_at)}</td>
+        <td>${p.taken_at ? formatDate(p.taken_at) : '—'}</td>
+        <td><button class="danger" onclick="deletePhoto(${p.id})">Borrar</button></td>
+      </tr>`;
+    });
+  } catch (e) {
+    // el 401/403 ya redirige a login dentro de api()
+  }
+}
+
+function formatDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+}
+
+async function deletePhoto(id) {
+  if (!confirm('¿Borrar esta foto del server? Esto no se puede deshacer.')) return;
+  await api('/admin/photos/' + id, { method: 'DELETE' });
+  loadAll();
+}
+
+async function deleteUser(id, username, photoCount) {
+  const warning = photoCount > 0
+    ? `Esto borrará al usuario "${username}" Y sus ${photoCount} foto(s). Esto no se puede deshacer.`
+    : `¿Borrar al usuario "${username}"? Esto no se puede deshacer.`;
+  if (!confirm(warning)) return;
+  try {
+    await api('/admin/users/' + id, { method: 'DELETE' });
+    loadAll();
+  } catch (e) {
+    alert('No se pudo borrar (¿intentaste borrar tu propio usuario?).');
+  }
+}
+
+async function createUser() {
+  const username = document.getElementById('newUsername').value.trim();
+  const password = document.getElementById('newPassword').value;
+  const is_admin = document.getElementById('newIsAdmin').checked;
+  const msgEl = document.getElementById('userMsg');
+  msgEl.className = 'msg';
+  msgEl.textContent = '';
+  if (!username || !password) {
+    msgEl.className = 'msg error';
+    msgEl.textContent = 'Rellena usuario y contraseña.';
+    return;
+  }
+  try {
+    await api('/admin/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password, is_admin })
+    });
+    document.getElementById('newUsername').value = '';
+    document.getElementById('newPassword').value = '';
+    document.getElementById('newIsAdmin').checked = false;
+    msgEl.className = 'msg success';
+    msgEl.textContent = `Usuario "${username}" creado.`;
+    loadAll();
+  } catch (e) {
+    msgEl.className = 'msg error';
+    msgEl.textContent = 'No se pudo crear (¿nombre de usuario repetido?).';
+  }
+}
+
+// Al cargar la página: si ya hay token guardado, saltar directo al dashboard.
+if (getToken()) {
+  showDashboard();
+  loadAll();
+} else {
+  showLogin('');
+}
+
+document.getElementById('loginPassword').addEventListener('keydown', e => {
+  if (e.key === 'Enter') doLogin();
+});
+</script>
+</body>
+</html>

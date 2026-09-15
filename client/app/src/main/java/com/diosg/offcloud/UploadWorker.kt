@@ -30,6 +30,7 @@ class UploadWorker(
         val mimeType = inputData.getString(KEY_MIME_TYPE) ?: "image/jpeg"
         val deviceId = inputData.getString(KEY_DEVICE_ID) ?: "android-client"
         val hash = inputData.getString(KEY_HASH) ?: ""
+        val takenAt = inputData.getString(KEY_TAKEN_AT)
 
         val uri = Uri.parse(uriString)
         val dao = AppDatabase.getInstance(applicationContext).photoSyncDao()
@@ -41,11 +42,14 @@ class UploadWorker(
             } ?: return Result.failure()
 
             val mediaType = mimeType.toMediaTypeOrNull()
-            val requestBody = MultipartBody.Builder()
+            val bodyBuilder = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("file", filename, tempFile.asRequestBody(mediaType))
                 .addFormDataPart("device_id", deviceId)
-                .build()
+            if (!takenAt.isNullOrBlank()) {
+                bodyBuilder.addFormDataPart("taken_at", takenAt)
+            }
+            val requestBody = bodyBuilder.build()
 
             val request = Request.Builder()
                 .url("$serverUrl/photos/upload")
@@ -101,6 +105,7 @@ class UploadWorker(
         const val KEY_MIME_TYPE = "mime_type"
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_HASH = "hash"
+        const val KEY_TAKEN_AT = "taken_at"
         const val TAG = "offcloud_upload"
     }
 }

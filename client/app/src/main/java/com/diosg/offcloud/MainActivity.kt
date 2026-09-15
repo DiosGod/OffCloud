@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -26,6 +27,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -49,6 +51,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.documentfile.provider.DocumentFile
+import androidx.exifinterface.media.ExifInterface
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
@@ -422,6 +425,8 @@ private suspend fun scanAndEnqueue(
 
         dao.upsert(PhotoSyncState(localUri = uriString, hash = hash, status = "pending"))
 
+        val takenAt = extractTakenAt(context, doc.uri)
+
         val inputData = workDataOf(
             UploadWorker.KEY_URI to uriString,
             UploadWorker.KEY_SERVER_URL to serverUrl,
@@ -429,7 +434,8 @@ private suspend fun scanAndEnqueue(
             UploadWorker.KEY_FILENAME to (doc.name ?: "photo.jpg"),
             UploadWorker.KEY_MIME_TYPE to (doc.type ?: "image/jpeg"),
             UploadWorker.KEY_DEVICE_ID to "android-client",
-            UploadWorker.KEY_HASH to hash
+            UploadWorker.KEY_HASH to hash,
+            UploadWorker.KEY_TAKEN_AT to takenAt
         )
 
         val request = OneTimeWorkRequestBuilder<UploadWorker>()
@@ -467,6 +473,37 @@ private fun computeHash(context: Context, uri: Uri): String? {
             }
         }
         digest.digest().joinToString("") { "%02x".format(it) }
+    } catch (e: Exception) {
+        null
+    }
+}
+
+/**
+ * Lee la fecha real de captura desde el EXIF de la foto (la escribió la
+ * cámara al momento de disparar, viaja con el archivo pase por donde
+ * pase). Devuelve null si la foto no tiene ese metadato o si no es fiable
+ * (en cuyo caso conviene usar el override manual de fecha).
+ */
+private fun extractTakenAt(context: Context, uri: Uri): String? {
+    return try {
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            val exif = ExifInterface(input)
+            val exifDate = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+                ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
+            exifDate?.let { convertExifDateToIso(it) }
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
+/** Convierte "yyyy:MM:dd HH:mm:ss" (formato EXIF) a ISO 8601. */
+private fun convertExifDateToIso(exifDate: String): String? {
+    return try {
+        val parts = exifDate.trim().split(" ")
+        if (parts.size != 2) return null
+        val datePart = parts[0].replace(":", "-")
+        "${datePart}T${parts[1]}"
     } catch (e: Exception) {
         null
     }

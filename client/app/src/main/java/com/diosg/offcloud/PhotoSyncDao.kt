@@ -17,4 +17,10 @@ interface PhotoSyncDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(state: PhotoSyncState)
+
+    @Query("DELETE FROM photo_sync_state WHERE localUri = :uri")
+    suspend fun deleteByUri(uri: String)
+
+    @Query("DELETE FROM photo_sync_state")
+    suspend fun deleteAll()
 }

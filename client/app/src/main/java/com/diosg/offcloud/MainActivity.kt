@@ -9,6 +9,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,7 +43,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.DeviceFontFamilyName
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -111,11 +114,23 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme(colorScheme = OffCloudColorScheme) {
                 Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(OffCloudBackground),
+                    modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
+                    // Wallpaper de fondo
+                    Image(
+                        painter = painterResource(id = R.drawable.background),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    // Velo oscuro encima: mantiene el texto legible sobre
+                    // las zonas más claras del wallpaper.
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0xCC0D0B14))
+                    )
                     AppRoot(prefs)
                 }
             }
@@ -159,7 +174,7 @@ private fun CenteredCard(content: @Composable ColumnScope.() -> Unit) {
             .widthIn(max = 380.dp)
             .padding(24.dp),
         shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = SurfaceElevated),
+        colors = CardDefaults.cardColors(containerColor = Color(0xF21A1625)),
         elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
     ) {
         Column(
@@ -380,6 +395,15 @@ fun SyncScreen(prefs: SharedPreferences, serverUrl: String, onLogout: () -> Unit
             color = TextMuted
         )
 
+        TextButton(onClick = {
+            scope.launch {
+                withContext(Dispatchers.IO) { dao.deleteAll() }
+                statusText = "Estado local borrado. El próximo sync revisará todas las fotos."
+            }
+        }) {
+            Text("Resetear estado local", color = TextMuted, fontSize = 12.sp)
+        }
+
         TextButton(onClick = onLogout) {
             Text("Cerrar sesión", color = AccentSecondary)
         }
@@ -410,22 +434,38 @@ private suspend fun scanAndEnqueue(
     }
 
     val workManager = WorkManager.getInstance(context)
+
+    // Preguntamos al server qué tiene REALMENTE. Si una foto está marcada
+    // como "uploaded" en local pero su hash ya no está en el server (p.ej.
+    // se borró desde el panel admin), hay que volver a subirla.
+    val serverHashes = fetchServerManifest(serverUrl, token)
+
     var enqueued = 0
     var skipped = 0
+    var resurrected = 0
 
     for (doc in imageFiles) {
         val uriString = doc.uri.toString()
         val hash = computeHash(context, doc.uri) ?: continue
 
         val existing = dao.getByUri(uriString)
-        if (existing != null && existing.status == "uploaded" && existing.hash == hash) {
-            skipped++
-            continue
+        val markedUploaded = existing != null && existing.status == "uploaded" && existing.hash == hash
+
+        if (markedUploaded) {
+            // Solo confiamos en el "ya subido" local si el server confirma
+            // que tiene ese hash. Si el manifest falló (null), no tocamos
+            // nada para no reenviar todo por un problema de red puntual.
+            if (serverHashes == null || serverHashes.contains(hash)) {
+                skipped++
+                continue
+            }
+            // El server ya no lo tiene: la fila local estaba huérfana.
+            resurrected++
         }
 
         dao.upsert(PhotoSyncState(localUri = uriString, hash = hash, status = "pending"))
 
-        val takenAt = extractTakenAt(context, doc.uri)
+        val takenAt = extractTakenAt(context, doc)
 
         val inputData = workDataOf(
             UploadWorker.KEY_URI to uriString,
@@ -453,13 +493,44 @@ private suspend fun scanAndEnqueue(
             .addTag(UploadWorker.TAG)
             .build()
 
-        // ExistingWorkPolicy.KEEP: si ya hay un worker encolado para esta
-        // misma foto (ej. sync anterior aún reintentando), no lo duplica.
-        workManager.enqueueUniqueWork(uriString, ExistingWorkPolicy.KEEP, request)
+        // ExistingWorkPolicy.REPLACE: si ya había un worker para esta foto
+        // (de un sync anterior, terminado o fallido), lo sustituye. Es lo
+        // que permite re-subir una foto que se borró del server.
+        workManager.enqueueUniqueWork(uriString, ExistingWorkPolicy.REPLACE, request)
         enqueued++
     }
 
-    return "Encoladas para subir: $enqueued | Ya al día: $skipped"
+    val parts = mutableListOf("Encoladas: $enqueued", "Ya al día: $skipped")
+    if (resurrected > 0) parts.add("Re-subiendo (borradas del server): $resurrected")
+    if (serverHashes == null) parts.add("⚠ sin conexión al manifest")
+    return parts.joinToString(" | ")
+}
+
+/**
+ * Pide al server la lista de hashes que realmente tiene. Devuelve null si
+ * falla la conexión (en ese caso preferimos no reconciliar, para no
+ * reenviar todo por un fallo puntual de red).
+ */
+private fun fetchServerManifest(serverUrl: String, token: String): Set<String>? {
+    return try {
+        val request = Request.Builder()
+            .url("$serverUrl/photos/manifest")
+            .header("Authorization", "Bearer $token")
+            .get()
+            .build()
+
+        OkHttpClient().newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return null
+            val bodyStr = response.body?.string() ?: return null
+            val arr = JSONObject(bodyStr).getJSONArray("hashes")
+            val set = mutableSetOf<String>()
+            for (i in 0 until arr.length()) set.add(arr.getString(i))
+            set
+        }
+    } catch (e: Exception) {
+        android.util.Log.e("OffCloud", "Manifest falló: ${e.message}", e)
+        null
+    }
 }
 
 private fun computeHash(context: Context, uri: Uri): String? {
@@ -479,22 +550,45 @@ private fun computeHash(context: Context, uri: Uri): String? {
 }
 
 /**
- * Lee la fecha real de captura desde el EXIF de la foto (la escribió la
- * cámara al momento de disparar, viaja con el archivo pase por donde
- * pase). Devuelve null si la foto no tiene ese metadato o si no es fiable
- * (en cuyo caso conviene usar el override manual de fecha).
+ * Determina la fecha real de la foto, en orden de preferencia:
+ *  1. EXIF DateTimeOriginal (la escribió la cámara al disparar)
+ *  2. EXIF DateTime
+ *  3. Fecha de modificación del archivo (respaldo: muchas fotos llegan
+ *     sin EXIF —descargadas, de WhatsApp, editadas, capturas— y en esos
+ *     casos la fecha del archivo suele ser la más cercana a la real)
+ * Devuelve null solo si no hay ninguna de las tres.
  */
-private fun extractTakenAt(context: Context, uri: Uri): String? {
-    return try {
+private fun extractTakenAt(context: Context, doc: DocumentFile): String? {
+    val uri = doc.uri
+
+    val exifDate = try {
         context.contentResolver.openInputStream(uri)?.use { input ->
             val exif = ExifInterface(input)
-            val exifDate = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+            exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
                 ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
-            exifDate?.let { convertExifDateToIso(it) }
         }
     } catch (e: Exception) {
         null
     }
+
+    if (exifDate != null) {
+        val iso = convertExifDateToIso(exifDate)
+        if (iso != null) {
+            android.util.Log.d("OffCloud", "${doc.name}: fecha EXIF = $iso")
+            return iso
+        }
+    }
+
+    val modified = doc.lastModified()
+    if (modified > 0) {
+        val iso = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.US)
+            .format(java.util.Date(modified))
+        android.util.Log.d("OffCloud", "${doc.name}: sin EXIF, usando fecha de archivo = $iso")
+        return iso
+    }
+
+    android.util.Log.d("OffCloud", "${doc.name}: sin fecha disponible")
+    return null
 }
 
 /** Convierte "yyyy:MM:dd HH:mm:ss" (formato EXIF) a ISO 8601. */

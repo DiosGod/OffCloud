@@ -11,6 +11,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import java.io.File
 import java.io.FileOutputStream
+import java.util.concurrent.TimeUnit
 
 /**
  * Sube una única foto al server. WorkManager se encarga de reintentar
@@ -25,12 +26,14 @@ class UploadWorker(
     override suspend fun doWork(): Result {
         val uriString = inputData.getString(KEY_URI) ?: return Result.failure()
         val serverUrl = inputData.getString(KEY_SERVER_URL) ?: return Result.failure()
-        val token = inputData.getString(KEY_TOKEN) ?: return Result.failure()
+        // Sin sesión (se cerró sesión con subidas en cola): no tiene sentido reintentar.
+        val token = SessionStore.getToken(applicationContext) ?: return Result.failure()
         val filename = inputData.getString(KEY_FILENAME) ?: "photo.jpg"
         val mimeType = inputData.getString(KEY_MIME_TYPE) ?: "image/jpeg"
         val deviceId = inputData.getString(KEY_DEVICE_ID) ?: "android-client"
         val hash = inputData.getString(KEY_HASH) ?: ""
         val takenAt = inputData.getString(KEY_TAKEN_AT)
+        val folderId = inputData.getInt(KEY_FOLDER_ID, -1)
 
         val uri = Uri.parse(uriString)
         val dao = AppDatabase.getInstance(applicationContext).photoSyncDao()
@@ -49,6 +52,9 @@ class UploadWorker(
             if (!takenAt.isNullOrBlank()) {
                 bodyBuilder.addFormDataPart("taken_at", takenAt)
             }
+            if (folderId >= 0) {
+                bodyBuilder.addFormDataPart("folder_id", folderId.toString())
+            }
             val requestBody = bodyBuilder.build()
 
             val request = Request.Builder()
@@ -57,7 +63,7 @@ class UploadWorker(
                 .post(requestBody)
                 .build()
 
-            val success = OkHttpClient().newCall(request).execute().use { it.isSuccessful }
+            val success = transferClient.newCall(request).execute().use { it.isSuccessful }
 
             if (success) {
                 dao.upsert(
@@ -100,12 +106,24 @@ class UploadWorker(
     companion object {
         const val KEY_URI = "uri"
         const val KEY_SERVER_URL = "server_url"
-        const val KEY_TOKEN = "token"
         const val KEY_FILENAME = "filename"
         const val KEY_MIME_TYPE = "mime_type"
         const val KEY_DEVICE_ID = "device_id"
         const val KEY_HASH = "hash"
         const val KEY_TAKEN_AT = "taken_at"
+        const val KEY_FOLDER_ID = "folder_id"
         const val TAG = "offcloud_upload"
+
+        /**
+         * Cliente para subir/bajar fotos. Los timeouts por defecto de OkHttp
+         * (10 s) se quedan cortos: una foto de ~6 MB por datos móviles a
+         * través de Tailscale los superaba y la subida fallaba siempre con
+         * "timeout". Compartido también por DownloadWorker.
+         */
+        val transferClient: OkHttpClient = OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(2, TimeUnit.MINUTES)
+            .readTimeout(2, TimeUnit.MINUTES)
+            .build()
     }
 }

@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from .auth import create_session, get_current_user, hash_password, require_admin, verify_password
 from .config import settings
 from .database import Base, SessionLocal, engine, get_db
-from .models import Photo, User, UserSession
+from .models import Folder, FolderPhoto, Photo, User, UserSession
 
 app = FastAPI(title="Photo Backup Server")
 
@@ -65,9 +65,12 @@ def upload_photo(
     file: UploadFile = File(...),
     device_id: str | None = Form(default=None),
     taken_at: str | None = Form(default=None),
+    folder_id: int | None = Form(default=None),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    folder = get_owned_folder(db, user, folder_id) if folder_id is not None else None
+
     storage_dir = Path(settings.storage_dir) / user.username
     tmp_dir = storage_dir / "tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -89,6 +92,9 @@ def upload_photo(
     )
     if existing:
         tmp_path.unlink(missing_ok=True)
+        if folder:
+            link_photo_to_folder(db, folder, existing)
+            db.commit()
         return {"status": "already_exists", "id": existing.id, "hash_sha256": file_hash}
 
     parsed_taken_at = None
@@ -115,10 +121,23 @@ def upload_photo(
         device_id=device_id,
     )
     db.add(photo)
+    db.flush()
+    if folder:
+        link_photo_to_folder(db, folder, photo)
     db.commit()
     db.refresh(photo)
 
     return {"id": photo.id, "hash_sha256": file_hash, "status": "stored"}
+
+
+@app.get("/photos/{photo_id}/file")
+def download_photo(
+    photo_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    photo = db.query(Photo).filter(Photo.id == photo_id, Photo.owner_id == user.id).first()
+    if not photo or not Path(photo.filepath).exists():
+        raise HTTPException(status_code=404, detail="Photo not found")
+    return FileResponse(photo.filepath, filename=photo.filename)
 
 
 @app.get("/photos/manifest")
@@ -137,6 +156,129 @@ def get_stats(user: User = Depends(get_current_user), db: Session = Depends(get_
         db.query(func.sum(Photo.size_bytes)).filter(Photo.owner_id == user.id).scalar() or 0
     )
     return {"total_photos": total_photos, "total_size_bytes": total_size_bytes}
+
+
+# --- Carpetas (multi-dispositivo) ---
+
+class CreateFolderRequest(BaseModel):
+    name: str
+
+
+class LinkHashesRequest(BaseModel):
+    hashes: list[str]
+
+
+def get_owned_folder(db: Session, user: User, folder_id: int) -> Folder:
+    folder = db.query(Folder).filter(Folder.id == folder_id, Folder.owner_id == user.id).first()
+    if not folder:
+        raise HTTPException(status_code=404, detail="Folder not found")
+    return folder
+
+
+def link_photo_to_folder(db: Session, folder: Folder, photo: Photo) -> bool:
+    """Añade la foto a la carpeta si no estaba. Devuelve True si la añadió."""
+    exists = (
+        db.query(FolderPhoto)
+        .filter(FolderPhoto.folder_id == folder.id, FolderPhoto.photo_id == photo.id)
+        .first()
+    )
+    if exists:
+        return False
+    db.add(FolderPhoto(folder_id=folder.id, photo_id=photo.id))
+    folder.updated_at = datetime.utcnow()
+    return True
+
+
+def folder_to_dict(db: Session, folder: Folder) -> dict:
+    photo_count, total_size = (
+        db.query(func.count(Photo.id), func.coalesce(func.sum(Photo.size_bytes), 0))
+        .join(FolderPhoto, FolderPhoto.photo_id == Photo.id)
+        .filter(FolderPhoto.folder_id == folder.id)
+        .one()
+    )
+    return {
+        "id": folder.id,
+        "name": folder.name,
+        "photo_count": photo_count,
+        "total_size_bytes": total_size,
+        "updated_at": folder.updated_at.isoformat() if folder.updated_at else None,
+    }
+
+
+@app.get("/folders")
+def list_folders(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    folders = db.query(Folder).filter(Folder.owner_id == user.id).order_by(Folder.name).all()
+    return [folder_to_dict(db, f) for f in folders]
+
+
+@app.post("/folders")
+def create_folder(
+    payload: CreateFolderRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Get-or-create por nombre: si otro dispositivo ya creó una carpeta con
+    ese nombre, se devuelve la misma en vez de duplicarla."""
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Folder name required")
+    folder = db.query(Folder).filter(Folder.owner_id == user.id, Folder.name == name).first()
+    if not folder:
+        folder = Folder(owner_id=user.id, name=name)
+        db.add(folder)
+        db.commit()
+        db.refresh(folder)
+    return folder_to_dict(db, folder)
+
+
+@app.get("/folders/{folder_id}/manifest")
+def get_folder_manifest(
+    folder_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    folder = get_owned_folder(db, user, folder_id)
+    photos = (
+        db.query(Photo)
+        .join(FolderPhoto, FolderPhoto.photo_id == Photo.id)
+        .filter(FolderPhoto.folder_id == folder.id)
+        .all()
+    )
+    return {
+        "photos": [
+            {
+                "id": p.id,
+                "hash_sha256": p.hash_sha256,
+                "filename": p.filename,
+                "size_bytes": p.size_bytes,
+                "taken_at": p.taken_at.isoformat() if p.taken_at else None,
+            }
+            for p in photos
+        ]
+    }
+
+
+@app.post("/folders/{folder_id}/link")
+def link_hashes_to_folder(
+    folder_id: int,
+    payload: LinkHashesRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Mete en la carpeta fotos que el usuario YA tiene en el server (por
+    hash), sin volver a subir los bytes. Devuelve los hashes que el server
+    no tiene: esos sí hay que subirlos."""
+    folder = get_owned_folder(db, user, folder_id)
+    wanted = set(payload.hashes)
+    photos = (
+        db.query(Photo)
+        .filter(Photo.owner_id == user.id, Photo.hash_sha256.in_(wanted))
+        .all()
+        if wanted
+        else []
+    )
+    linked = sum(1 for p in photos if link_photo_to_folder(db, folder, p))
+    db.commit()
+    found = {p.hash_sha256 for p in photos}
+    return {"linked": linked, "missing": sorted(wanted - found)}
 
 
 # --- Panel de administración ---
@@ -216,6 +358,13 @@ def delete_user(
     if user_dir.exists():
         shutil.rmtree(user_dir, ignore_errors=True)
 
+    folder_ids = [f.id for f in db.query(Folder.id).filter(Folder.owner_id == target.id).all()]
+    if folder_ids:
+        db.query(FolderPhoto).filter(FolderPhoto.folder_id.in_(folder_ids)).delete(
+            synchronize_session=False
+        )
+        db.query(Folder).filter(Folder.owner_id == target.id).delete()
+
     db.query(UserSession).filter(UserSession.user_id == target.id).delete()
     db.delete(target)
     db.commit()
@@ -255,6 +404,7 @@ def delete_photo(
     except Exception:
         pass
 
+    db.query(FolderPhoto).filter(FolderPhoto.photo_id == photo.id).delete()
     db.delete(photo)
     db.commit()
     return {"status": "deleted"}

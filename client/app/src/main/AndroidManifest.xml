@@ -3,6 +3,13 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Saber si hay una VPN (Tailscale) activa -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- Android 11+: sin esto no se puede comprobar si Tailscale está instalado -->
+    <queries>
+        <package android:name="com.tailscale.ipn" />
+    </queries>
 
     <application
         android:allowBackup="true"

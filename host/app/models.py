@@ -48,3 +48,28 @@ class Photo(Base):
     taken_at = Column(DateTime, nullable=True)
     uploaded_at = Column(DateTime, server_default=func.now())
     device_id = Column(String, nullable=True)
+
+
+class Folder(Base):
+    """Carpeta lógica en la nube. Se identifica por nombre dentro de cada
+    usuario: dos dispositivos con la misma cuenta que sincronizan "Camera"
+    comparten la misma carpeta. No afecta a dónde se guarda el archivo."""
+
+    __tablename__ = "folders"
+    __table_args__ = (UniqueConstraint("owner_id", "name", name="uq_owner_folder"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    name = Column(String, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now())
+
+
+class FolderPhoto(Base):
+    """Relación carpeta <-> foto (muchos a muchos: la misma foto, por hash,
+    puede estar en varias carpetas)."""
+
+    __tablename__ = "folder_photos"
+
+    folder_id = Column(Integer, ForeignKey("folders.id"), primary_key=True)
+    photo_id = Column(Integer, ForeignKey("photos.id"), primary_key=True)

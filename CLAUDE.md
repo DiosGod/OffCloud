@@ -86,6 +86,8 @@ DB_PATH=./data/app.db
 ADMIN_DISPLAY_PORT=8000       # solo informativo: puerto que se muestra en el log de arranque
 ```
 
+**En la torre (server de producción, 2026-11-14)** el `.env` guarda todo en el disco D: `STORAGE_DIR=D:/OffCloud` y `DB_PATH=D:/OffCloud/data/app.db` (fotos en `D:/OffCloud/{username}/…`). El usuario lo quiere así, todo en ese disco. Riesgo conocido y aceptado: borrar un usuario hace `rmtree(STORAGE_DIR/{username})` sin validar el nombre, así que **no hay que crear nunca un usuario llamado `data`** (al borrarlo se borraría `app.db`); tampoco nombres vacíos, `.` o `..`. Se propuso validar los nombres y limitar el `rmtree`; de momento no se hace.
+
 Las tablas `folders` y `folder_photos` son nuevas: `create_all` las crea solas en una BD existente, no hace falta borrar `app.db`. Las fotos subidas antes de que existieran las carpetas no están en ninguna; al "Añadir carpeta" y pulsar Subir se enlazan sin resubirse.
 
 Los antiguos `AUTH_USERNAME` / `AUTH_PASSWORD` / `API_TOKEN` ya no existen. Si se migra desde la versión single-user hay que borrar `data/app.db` (el esquema cambió: `users`, `sessions`, `photos.owner_id`).
@@ -165,9 +167,12 @@ Primer admin: se crea solo al arrancar si `users` está vacía, con `INITIAL_ADM
 - Compilar por línea de comandos: `java` no está en el PATH; usar el JDK de Android Studio: `JAVA_HOME="C:/Program Files/Android/Android Studio/jbr" ./gradlew.bat assembleDebug`
 - Room fijado en **2.7.1** (con 2.6.1 falla KSP2: "unexpected jvm signature V" en `suspend fun` que devuelven `Unit`)
 - `gradle.properties`: `android.disallowKotlinSourceSets=false` (conflicto KSP vs. "built-in Kotlin" de AGP nuevo). **Sin espacio al final de la línea**: Gradle falla con `'false '`.
-- IP de Tailscale del PC: `100.119.30.85` (puede cambiar si se reinstala Tailscale; también está escrita en `network_security_config.xml`). La app ya no depende de ella: usa el nombre MagicDNS `offcloud`.
+- **El server ya está en la torre (2026-11-14)**: Windows `DESKTOP-PS9EO7I`, nombre en Tailscale `offcloud`, IP `100.126.61.126`. El portátil `lenovo` (`100.119.30.85`, la IP que sigue escrita como respaldo en `network_security_config.xml` y que ya no sirve) queda como PC de desarrollo. La torre empezó con la **BD vacía** a propósito: tampoco es la BD final, se sigue probando y más adelante se creará una BD de "producción".
+- En la torre **no hay Android SDK ni adb**: no se puede leer la BD de Room del móvil hasta instalar Android Studio o las platform-tools.
+- **Firewall de la torre (arreglado el 2026-11-14)**: se deshabilitaron las dos reglas "Query User" de `python314\python.exe` (TCP y UDP), que dejaban entrar desde cualquier dirección en los perfiles privado y público, y se creó `OffCloud Server`: TCP 8000 solo desde `100.64.0.0/10`, perfil Any. Verificado en el móvil: con Tailscale, "Server en línea"; sin Tailscale, por wifi de casa a la IP local, no responde. Si Windows vuelve a preguntar si Python puede usar la red (p. ej. al actualizar Python), hay que denegarlo o volver a deshabilitar esas reglas. IPs de la torre en la red de casa: `192.168.1.33` y `192.168.1.35` (dos adaptadores wifi).
+- La app ya no depende de la IP: usa el nombre MagicDNS `offcloud`.
 - Tailscale CLI en este PC: `"/c/Program Files/Tailscale/tailscale.exe" status` (nombre, IP, MagicDNS).
-- Firewall de Windows: regla de entrada `OffCloud Server`, TCP 8000, con Ámbito restringido a `100.64.0.0/10` (rango de Tailscale). Hubo que deshabilitar dos reglas de **bloqueo** residuales de `python.exe`, que ganaban sobre la regla de permiso.
+- Firewall de Windows en el lenovo: regla de entrada `OffCloud Server`, TCP 8000, con Ámbito restringido a `100.64.0.0/10` (rango de Tailscale). Hubo que deshabilitar dos reglas de **bloqueo** residuales de `python.exe`, que ganaban sobre la regla de permiso.
 - Si `uvicorn.exe` da error de "Device Guard"/Smart App Control: usar `python -m uvicorn` (ya está en `start_server.bat`).
 - Guía paso a paso para replicar todo en otro PC: `setup-guide.md`.
 
@@ -181,6 +186,8 @@ Primer admin: se crea solo al arrancar si `users` está vacía, con `INITIAL_ADM
 - Acceso remoto por Tailscale con datos móviles.
 - Login desde la app con usuario/contraseña, subida de fotos reales, wallpaper y tema.
 - Carpetas en el server (curl): get-or-create por nombre, link sin resubir, manifest de carpeta, descarga, aislamiento entre usuarios, cascadas al borrar foto/usuario.
+- Server en la torre `offcloud` (2026-11-14): `http://offcloud:8000/health` y `http://offcloud.tail06f56a.ts.net:8000/health` responden desde el PC; el móvil entra y sube contra él. Los archivos guardados tienen el SHA-256 que dice su nombre.
+- **Restaurar con Bajar** (2026-11-14, confirmado por el usuario): una carpeta nueva y vacía en el móvil, vinculada a `DCIM`, recibió las 2 fotos y tras Actualizar quedó "✓ Al día" (el hash coincide).
 - En el móvil (2026-11-14): botón **Conectar** de Tailscale (el broadcast `CONNECT_VPN` funciona con la versión instalada), **Añadir carpeta** y **Subir**. Implica que la migración Room 1→2 sobre la BD existente funcionó (la app arrancó y usó la caché de hashes).
 
 ## Tareas de testing pendientes
@@ -188,16 +195,16 @@ Primer admin: se crea solo al arrancar si `users` está vacía, con `INITIAL_ADM
 Checklist para probar en el móvil. **Mantenerla al día**: al añadir una funcionalidad, apuntar aquí cómo probarla; cuando el usuario confirme una, moverla a "Verificado y funcionando" con la fecha.
 
 **⚠ PRIORIDAD antes de pasar a producción (2026-11-14)**, en este orden (las pruebas concretas están en las secciones de abajo):
-1. **Restaurar**: Bajar en un segundo dispositivo o una instalación limpia → están todas las fotos, se abren y la carpeta queda "✓ Al día" (eso confirma que el hash coincide).
+1. **Restaurar**: Bajar en un segundo dispositivo o una instalación limpia → están todas las fotos, se abren y la carpeta queda "✓ Al día" (eso confirma que el hash coincide). *Hecho a pequeña escala (2 fotos, carpeta nueva en el mismo móvil, 2026-11-14: bajaron y quedó "✓ Al día"); falta con muchas fotos o en otro dispositivo.*
 2. **Interrupciones**: cortar la red, cerrar la app y tirar el server a mitad de subida → termina sola, sin pérdidas ni duplicados, y cuadra con el panel admin.
 3. **Volumen real**: la carpeta `Camera` (unos 25 GB, miles de archivos): tiempo del primer y del segundo cálculo de estado, cola de cientos de subidas, fotos grandes por datos móviles.
-4. **Ensayo de migración a la torre**: renombrar a `offcloud`, copiar `host/data/` y que el móvil siga funcionando sin tocar nada. Antes conviene hacer que el móvil detecte el cambio de server (identificador propio del server) para evitar vínculos de carpetas cruzados.
+4. **Ensayo de migración entre PCs**: la torre ya es `offcloud`, pero empezó con la BD vacía, así que copiar los datos (ahora `D:/OffCloud/` entero) a otro PC sin que el móvil note nada sigue sin probarse. Antes conviene hacer que el móvil detecte el cambio de server (identificador propio del server) para evitar vínculos de carpetas cruzados.
 5. **Fechas**: una foto sin EXIF (WhatsApp) acaba en el año/mes correcto.
 
-No son tests pero hacen falta para producción: **copia de seguridad de `host/data/`** (ahora es un único disco) y **separar dev y prod en el móvil** (dos versiones de la app que se instalan a la vez, OffCloud y OffCloud Dev, con distinto server por defecto). Propuesto, sin hacer.
+No son tests pero hacen falta para producción: **copia de seguridad de `D:/OffCloud/`** (el usuario la quiere; ahora es un único disco) y **separar dev y prod en el móvil** (dos versiones de la app que se instalan a la vez, OffCloud y OffCloud Dev, con distinto server por defecto). Propuesto, sin hacer.
 
 **Server automático en el login (2026-11-14)** — requiere renombrar antes el PC a `offcloud` en Tailscale
-- [ ] Desde el PC: `http://offcloud:8000/health` responde (comprueba MagicDNS).
+- [x] Desde el PC: `http://offcloud:8000/health` responde (comprueba MagicDNS). Verificado 2026-11-14 en la torre.
 - [ ] En el móvil, con la IP antigua guardada: al abrir el login aparece "Server: offcloud:8000" solo, y el bloque de conexión dice "Server en línea".
 - [ ] Instalación limpia: entrar solo con usuario y contraseña.
 - [ ] El nombre corto `offcloud` resuelve en Android. Si no, probar con "Cambiar" y `http://offcloud.tail06f56a.ts.net:8000`, y cambiar `DEFAULT_SERVER_URL` a ese.
@@ -214,10 +221,11 @@ No son tests pero hacen falta para producción: **copia de seguridad de `host/da
 - [ ] Tarjeta translúcida y bordes de los paneles: se lee bien sobre las zonas claras del wallpaper.
 
 **Carpetas multi-dispositivo**
-- [ ] Segundo dispositivo (u otra instalación): ve las carpetas como "No vinculada", vincula una carpeta vacía y **Bajar** descarga las fotos a esa carpeta.
+- [x] Vincular una carpeta vacía y **Bajar** descarga las fotos a esa carpeta (2026-11-14, en el mismo móvil con una carpeta nueva).
+- [ ] Lo mismo en un segundo dispositivo o instalación limpia: ve las carpetas como "No vinculada".
 - [ ] Bajar con un nombre que ya existe en la carpeta local: se crea `nombre (1).jpg` y no se pisa.
 - [ ] Pulsar Bajar dos veces seguidas no duplica archivos.
-- [ ] Tras terminar las descargas y pulsar Actualizar: "✓ Al día".
+- [x] Tras terminar las descargas y pulsar Actualizar: "✓ Al día" (2026-11-14).
 - [ ] Borrar una foto desde el panel admin → la carpeta pasa a "↑ 1 por subir" → Subir la vuelve a subir.
 - [ ] Añadir en el móvil B una carpeta con el mismo nombre que una del móvil A: se reutiliza la de la nube (no se duplica) y Subir solo enlaza lo que ya estaba.
 - [ ] Desvincular y volver a vincular una carpeta.

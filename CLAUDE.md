@@ -4,7 +4,7 @@ Backup de fotos self-hosted para reemplazar Google Fotos: app Android que
 sube fotos a un server propio (PC/NAS en casa), accesible de forma privada
 vía Tailscale. Repo dividido en `host/` (server) y `client/` (Android).
 
-Última actualización: 2026-11-14.
+Última actualización: 2026-11-24.
 
 ## Decisiones de arquitectura (ya tomadas, no reabrir sin motivo)
 
@@ -43,7 +43,12 @@ host/
   .gitignore
   README.md
   requirements.txt            # fastapi, uvicorn, python-multipart, pydantic-settings, sqlalchemy, bcrypt
-  start_server.bat            # doble click; usa `python -m uvicorn` (ver Device Guard más abajo)
+  start_server.bat            # desarrollo: doble click; usa `python -m uvicorn` (ver Device Guard más abajo)
+  deploy/
+    deploy.ps1                # instala/actualiza una versión (tag) en D:\OffCloud\server
+    run_server.bat            # arranque de producción (lo lanza la tarea programada), log a logs\server.log
+    install_tasks.ps1         # registra las tareas "OffCloud Server" y "OffCloud Backup DB" (como admin)
+    backup_db.py              # copia coherente de app.db, conserva las 30 últimas
   app/
     __init__.py
     main.py                   # endpoints FastAPI + bootstrap admin + print de URL del panel
@@ -86,7 +91,22 @@ DB_PATH=./data/app.db
 ADMIN_DISPLAY_PORT=8000       # solo informativo: puerto que se muestra en el log de arranque
 ```
 
-**En la torre (server de producción, 2026-11-14)** el `.env` guarda todo en el disco D: `STORAGE_DIR=D:/OffCloud` y `DB_PATH=D:/OffCloud/data/app.db` (fotos en `D:/OffCloud/{username}/…`). El usuario lo quiere así, todo en ese disco. Riesgo conocido y aceptado: borrar un usuario hace `rmtree(STORAGE_DIR/{username})` sin validar el nombre, así que **no hay que crear nunca un usuario llamado `data`** (al borrarlo se borraría `app.db`); tampoco nombres vacíos, `.` o `..`. Se propuso validar los nombres y limitar el `rmtree`; de momento no se hace.
+**Producción en la torre (release v0.1.0, 2026-11-24)**: todo en el disco D:, separado del checkout de desarrollo (detalle y comandos en `host/README.md`):
+
+```
+D:\OffCloud\
+  server\    copia de host/ en la versión etiquetada (VERSION) + venv propio + .env
+  photos\    {username}\{año}\{mes}\{hash}.ext      (STORAGE_DIR=D:/OffCloud/photos)
+  db\        app.db                                  (DB_PATH=D:/OffCloud/db/app.db)
+  logs\      server.log, backup.log
+  backups\   app-AAAAMMDD-HHMMSS.db, las 30 últimas
+```
+
+- Se despliega con `host/deploy/deploy.ps1 -Version vX.Y.Z` (exporta `host/` de ese tag con `git archive`, conserva `.env` y venv). Nunca se ejecuta el server de producción desde `C:\Projects`.
+- Arranque: tarea programada **"OffCloud Server"** como SYSTEM al encender Windows (sin iniciar sesión), `deploy/run_server.bat`, reintento cada minuto si se cae. Backup: tarea **"OffCloud Backup DB"** a las 04:00 con `deploy/backup_db.py` (API de backup de SQLite). Las registra `deploy/install_tasks.ps1`, que hay que ejecutar **como administrador** (la consola de Claude Code en la torre no lo es). Reiniciar el server también requiere admin.
+- La contraseña del admin inicial se generó al azar y está en `D:\OffCloud\server\.env` (`INITIAL_ADMIN_PASSWORD`); no se escribe en el chat.
+- La BD de producción empezó vacía el 2026-11-24 (la de pruebas del 2026-11-14 ya no estaba).
+- Desde v0.1.0 los nombres de usuario se validan (1-32 caracteres `A-Za-z0-9._-`, sin `.`/`..`, sin nombres reservados de Windows, sin distinguir mayúsculas) y el `rmtree` al borrar un usuario solo actúa sobre una subcarpeta directa de `STORAGE_DIR`. Como la BD ya no está dentro de `STORAGE_DIR`, el riesgo del usuario `data` desapareció.
 
 Las tablas `folders` y `folder_photos` son nuevas: `create_all` las crea solas en una BD existente, no hace falta borrar `app.db`. Las fotos subidas antes de que existieran las carpetas no están en ninguna; al "Añadir carpeta" y pulsar Subir se enlazan sin resubirse.
 
@@ -110,7 +130,7 @@ POST   /folders/{id}/link     { hashes } → { linked, missing }  (enlaza fotos 
 
 GET    /admin                 → página HTML del panel (pide user/password admin)
 GET    /admin/users           (solo admin)
-POST   /admin/users           { username, password, is_admin }  (solo admin)
+POST   /admin/users           { username, password, is_admin }  (solo admin; 400 si el nombre no es válido, 409 si ya existe sin distinguir mayúsculas)
 DELETE /admin/users/{id}      (solo admin) borra en cascada: fotos (archivo + fila), carpetas lógicas y sus enlaces, carpeta física del usuario, sesiones y usuario. Un admin no puede borrarse a sí mismo (400).
 GET    /admin/photos          (solo admin, fotos de TODOS los usuarios)
 DELETE /admin/photos/{id}     (solo admin, borra archivo + fila + sus enlaces a carpetas)
@@ -168,7 +188,8 @@ Primer admin: se crea solo al arrancar si `users` está vacía, con `INITIAL_ADM
 - Room fijado en **2.7.1** (con 2.6.1 falla KSP2: "unexpected jvm signature V" en `suspend fun` que devuelven `Unit`)
 - `gradle.properties`: `android.disallowKotlinSourceSets=false` (conflicto KSP vs. "built-in Kotlin" de AGP nuevo). **Sin espacio al final de la línea**: Gradle falla con `'false '`.
 - **El server ya está en la torre (2026-11-14)**: Windows `DESKTOP-PS9EO7I`, nombre en Tailscale `offcloud`, IP `100.126.61.126`. El portátil `lenovo` (`100.119.30.85`, la IP que sigue escrita como respaldo en `network_security_config.xml` y que ya no sirve) queda como PC de desarrollo. La torre empezó con la **BD vacía** a propósito: tampoco es la BD final, se sigue probando y más adelante se creará una BD de "producción".
-- En la torre **no hay Android SDK ni adb**: no se puede leer la BD de Room del móvil hasta instalar Android Studio o las platform-tools.
+- En la torre **no hay Android SDK, ni adb, ni JDK**: el APK se compila en el `lenovo`, y no se puede leer la BD de Room del móvil hasta instalar Android Studio o las platform-tools.
+- Torre (2026-11-24): suspensión e hibernación con corriente alterna en "nunca" (`powercfg`; antes se suspendía a las 5 h). Tailscale estaba **parado** ese día ("Tailscale is stopped"): tiene que estar conectado y en modo *Run unattended* para que el server sea accesible sin sesión iniciada. Python 3.14 está instalado por usuario (`AppData\Local\Programs\Python\Python314`); el venv de producción lo usa como base, y el proceso que escucha es ese `python.exe` (sus reglas "Query User" siguen deshabilitadas).
 - **Firewall de la torre (arreglado el 2026-11-14)**: se deshabilitaron las dos reglas "Query User" de `python314\python.exe` (TCP y UDP), que dejaban entrar desde cualquier dirección en los perfiles privado y público, y se creó `OffCloud Server`: TCP 8000 solo desde `100.64.0.0/10`, perfil Any. Verificado en el móvil: con Tailscale, "Server en línea"; sin Tailscale, por wifi de casa a la IP local, no responde. Si Windows vuelve a preguntar si Python puede usar la red (p. ej. al actualizar Python), hay que denegarlo o volver a deshabilitar esas reglas. IPs de la torre en la red de casa: `192.168.1.33` y `192.168.1.35` (dos adaptadores wifi).
 - La app ya no depende de la IP: usa el nombre MagicDNS `offcloud`.
 - Tailscale CLI en este PC: `"/c/Program Files/Tailscale/tailscale.exe" status` (nombre, IP, MagicDNS).
@@ -201,7 +222,15 @@ Checklist para probar en el móvil. **Mantenerla al día**: al añadir una funci
 4. **Ensayo de migración entre PCs**: la torre ya es `offcloud`, pero empezó con la BD vacía, así que copiar los datos (ahora `D:/OffCloud/` entero) a otro PC sin que el móvil note nada sigue sin probarse. Antes conviene hacer que el móvil detecte el cambio de server (identificador propio del server) para evitar vínculos de carpetas cruzados.
 5. **Fechas**: una foto sin EXIF (WhatsApp) acaba en el año/mes correcto.
 
-No son tests pero hacen falta para producción: **copia de seguridad de `D:/OffCloud/`** (el usuario la quiere; ahora es un único disco) y **separar dev y prod en el móvil** (dos versiones de la app que se instalan a la vez, OffCloud y OffCloud Dev, con distinto server por defecto). Propuesto, sin hacer.
+No son tests pero hacen falta para producción: **copia de seguridad de las fotos** (desde v0.1.0 hay backup diario de `app.db` en `D:\OffCloud\backups`, pero en el mismo disco; las fotos no tienen ninguna copia fuera de D:) y **separar dev y prod en el móvil** (dos versiones de la app que se instalan a la vez, OffCloud y OffCloud Dev, con distinto server por defecto). Propuesto, sin hacer.
+
+**Release v0.1.0 en la torre (2026-11-24)**
+- [x] Desplegado en `D:\OffCloud\server`; probado a mano en `127.0.0.1:8010`: health, login admin, `/admin`, carpeta, subida (la foto acabó en `D:\OffCloud\photos\admin\2020\05\`) y `backup_db.py` leyendo `DB_PATH` del `.env`. Datos de prueba borrados después.
+- [ ] `install_tasks.ps1` como administrador → al final dice "Server en línea".
+- [ ] Reiniciar la torre **sin iniciar sesión** → el móvil ve "Server en línea" (comprueba la tarea como SYSTEM y Tailscale unattended).
+- [ ] Al día siguiente hay un `app-*.db` en `D:\OffCloud\backups` y una línea "backup OK" en `logs\backup.log`.
+- [ ] Panel admin: crear un usuario con un nombre no válido (p. ej. `a/b`) muestra el error.
+- [ ] Matar el proceso de python del server → la tarea lo vuelve a arrancar en un minuto o menos.
 
 **Server automático en el login (2026-11-14)** — requiere renombrar antes el PC a `offcloud` en Tailscale
 - [x] Desde el PC: `http://offcloud:8000/health` responde (comprueba MagicDNS). Verificado 2026-11-14 en la torre.

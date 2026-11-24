@@ -1,11 +1,12 @@
-﻿# Registra las tareas programadas del server de producción. EJECUTAR COMO
-# ADMINISTRADOR (una sola vez; volver a ejecutarlo las reemplaza):
+﻿# Registra las tareas programadas del server de producción y (re)arranca el
+# server. EJECUTAR COMO ADMINISTRADOR. Volver a ejecutarlo reemplaza las tareas
+# y reinicia el server: es lo que hay que hacer después de cada deploy.ps1.
 #
 #   powershell -ExecutionPolicy Bypass -File D:\OffCloud\server\deploy\install_tasks.ps1
 #
 # - "OffCloud Server": arranca el server al encender Windows, como SYSTEM (sin
-#   iniciar sesión y sin ventana). Si el proceso termina con error, se
-#   reintenta cada minuto.
+#   iniciar sesión y sin ventana), y lo vuelve a intentar cada 5 minutos si no
+#   está corriendo (p. ej. el disco USB no estaba conectado).
 # - "OffCloud Backup DB": copia app.db a <Root>\backups cada día a las 04:00
 #   (si el PC estaba apagado, al encenderlo).
 
@@ -17,12 +18,30 @@ $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIden
 if (-not $isAdmin) { throw "Ejecuta este script en un PowerShell abierto como administrador." }
 
 $server = Join-Path $Root "server"
+
+# Si ya estaba corriendo, pararlo (también sirve para reiniciar tras desplegar
+# una versión nueva). Parar la tarea solo cierra el cmd: el python de uvicorn
+# puede quedar vivo con el código viejo y el puerto ocupado, así que se cierra
+# aparte.
+Stop-ScheduledTask -TaskName "OffCloud Server" -ErrorAction SilentlyContinue
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+    Where-Object { $_.CommandLine -match 'uvicorn app\.main:app' -and $_.CommandLine -match '--port 8000' } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+Start-Sleep -Seconds 2
+
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 
 # --- Server ---
 $action = New-ScheduledTaskAction -Execute "cmd.exe" `
     -Argument "/c `"$server\deploy\run_server.bat`"" -WorkingDirectory $server
+# Al arrancar Windows y, desde ahí, cada 5 minutos sin fin. Si el server ya
+# está corriendo no pasa nada (IgnoreNew). Si no (el disco USB no estaba al
+# encender, se desconectó y el vigilante paró el server, o se cayó), se vuelve
+# a lanzar. "Reiniciar si falla" no basta: no salta cuando el programa termina
+# con error.
 $trigger = New-ScheduledTaskTrigger -AtStartup
+$trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+    -RepetitionInterval (New-TimeSpan -Minutes 5)).Repetition
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
     -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `

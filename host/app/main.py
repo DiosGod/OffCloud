@@ -2,12 +2,14 @@ import hashlib
 import os
 import re
 import shutil
+import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -83,9 +85,54 @@ def bootstrap_admin() -> None:
     print(f"                http://<tu-ip-tailscale>:{port}/admin")
     print("=" * 60 + "\n")
 
+    threading.Thread(target=_storage_watchdog, name="storage-watchdog", daemon=True).start()
+
+
+# --- Disco de datos ---
+#
+# En la torre, fotos y BD están en un disco USB externo. Si se desconecta con
+# el server en marcha, el proceso sigue vivo pero todo falla. El vigilante lo
+# detecta y termina el proceso; la tarea programada lo vuelve a lanzar cada
+# pocos minutos, y solo arranca cuando el disco vuelve a estar.
+
+WATCHDOG_INTERVAL_S = 30
+WATCHDOG_FAILURES_TO_EXIT = 2
+
+
+def storage_problem() -> str | None:
+    """None si la carpeta de fotos y la BD están accesibles; si no, el motivo."""
+    if not Path(settings.storage_dir).is_dir():
+        return f"No se encuentra la carpeta de fotos ({settings.storage_dir})"
+    if not Path(settings.db_path).is_file():
+        return f"No se encuentra la base de datos ({settings.db_path})"
+    try:
+        with engine.connect() as conn:
+            conn.exec_driver_sql("SELECT count(*) FROM users").scalar()
+    except Exception as e:
+        return f"No se puede leer la base de datos: {e}"
+    return None
+
+
+def _storage_watchdog() -> None:
+    failures = 0
+    while True:
+        time.sleep(WATCHDOG_INTERVAL_S)
+        problem = storage_problem()
+        failures = failures + 1 if problem else 0
+        if problem:
+            print(f"[vigilante] {datetime.now():%Y-%m-%d %H:%M:%S} {problem} "
+                  f"({failures}/{WATCHDOG_FAILURES_TO_EXIT})", flush=True)
+        if failures >= WATCHDOG_FAILURES_TO_EXIT:
+            print("[vigilante] El disco de datos no está disponible: se detiene el server.",
+                  flush=True)
+            os._exit(3)
+
 
 @app.get("/health")
 def health():
+    problem = storage_problem()
+    if problem:
+        return JSONResponse(status_code=503, content={"status": "error", "detail": problem})
     return {"status": "ok"}
 
 

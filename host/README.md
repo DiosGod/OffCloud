@@ -37,11 +37,9 @@ powershell -ExecutionPolicy Bypass -File host\deploy\deploy.ps1 -Version v0.2.0
 
 `deploy.ps1` reemplaza `server\app` y `server\deploy`, conserva `.env` y el
 venv, e instala `requirements.txt`. No toca fotos, BD ni backups. Después hay
-que reiniciar el server (PowerShell como administrador):
-
-```powershell
-Stop-ScheduledTask "OffCloud Server"; Start-ScheduledTask "OffCloud Server"
-```
+que reiniciar el server volviendo a ejecutar `install_tasks.ps1` como
+administrador (ver abajo). Solo `Stop-ScheduledTask` no basta: cierra el `cmd`
+pero puede dejar vivo el `python` con el código viejo.
 
 ### Arranque automático y backups (una sola vez, como administrador)
 
@@ -52,8 +50,20 @@ powershell -ExecutionPolicy Bypass -File D:\OffCloud\server\deploy\install_tasks
 Registra dos tareas programadas que corren como SYSTEM (sin iniciar sesión):
 
 - **OffCloud Server**: al encender Windows lanza `deploy\run_server.bat`
-  (uvicorn en `0.0.0.0:8000`, log en `logs\server.log`). Si se cae con error,
-  se reintenta cada minuto.
+  (uvicorn en `0.0.0.0:8000`, log en `logs\server.log`) y, desde ahí, lo
+  vuelve a intentar cada 5 minutos si no está corriendo.
+
+**El disco D: es un USB externo** (WD My Passport). Qué pasa si no está:
+
+- Al encender sin el disco: el código también está en D:, así que no arranca
+  nada y no se escribe nada en C:. En cuanto se conecta, la tarea lo arranca en
+  5 minutos como mucho.
+- Si se desconecta con el server en marcha: `/health` responde 503 con el
+  motivo (la app muestra "El server no responde"), y un vigilante interno para
+  el server tras dos comprobaciones fallidas (unos 30-60 s). Al volver el
+  disco, la tarea lo arranca de nuevo.
+- Si al volver a conectarlo Windows le diera otra letra, no arrancaría: hay
+  que devolverle la D: en Administración de discos.
 - **OffCloud Backup DB**: cada día a las 04:00 copia `app.db` a `backups\`
   con `deploy\backup_db.py` (copia coherente aunque el server esté escribiendo).
   **Solo la BD**: las fotos no tienen copia fuera de D:.

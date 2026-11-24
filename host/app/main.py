@@ -1,4 +1,5 @@
 import hashlib
+import re
 import shutil
 import time
 from datetime import datetime
@@ -21,6 +22,38 @@ Base.metadata.create_all(bind=engine)
 
 ADMIN_HTML_PATH = Path(__file__).parent / "static" / "admin.html"
 
+# El nombre de usuario se usa como nombre de carpeta en disco
+# (STORAGE_DIR/{username}), así que solo se admiten nombres que sean una
+# carpeta normal: letras, números, punto, guion y guion bajo, empezando por
+# letra o número, sin acabar en punto y sin nombres reservados de Windows.
+USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
+WINDOWS_RESERVED = {"con", "prn", "aux", "nul"} | {f"com{i}" for i in range(1, 10)} | {
+    f"lpt{i}" for i in range(1, 10)
+}
+
+
+def username_error(username: str) -> str | None:
+    """Devuelve el motivo por el que el nombre no vale, o None si es válido."""
+    if not USERNAME_RE.fullmatch(username):
+        return (
+            "Nombre de usuario no válido: 1-32 caracteres, solo letras, números, "
+            "'.', '-' y '_', empezando por letra o número"
+        )
+    if username.endswith("."):
+        return "Nombre de usuario no válido: no puede acabar en '.'"
+    if username.split(".")[0].lower() in WINDOWS_RESERVED:
+        return "Nombre de usuario no válido: es un nombre reservado de Windows"
+    return None
+
+
+def user_storage_dir(username: str) -> Path | None:
+    """Carpeta física del usuario, solo si es una subcarpeta directa de STORAGE_DIR."""
+    root = Path(settings.storage_dir).resolve()
+    user_dir = (root / username).resolve()
+    if username_error(username) or user_dir.parent != root:
+        return None
+    return user_dir
+
 
 @app.on_event("startup")
 def bootstrap_admin() -> None:
@@ -29,6 +62,9 @@ def bootstrap_admin() -> None:
     try:
         if db.query(User).count() == 0:
             if settings.initial_admin_username and settings.initial_admin_password:
+                error = username_error(settings.initial_admin_username)
+                if error:
+                    raise RuntimeError(f"INITIAL_ADMIN_USERNAME: {error}")
                 admin = User(
                     username=settings.initial_admin_username,
                     password_hash=hash_password(settings.initial_admin_password),
@@ -318,7 +354,14 @@ def create_user(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    existing = db.query(User).filter(User.username == payload.username).first()
+    error = username_error(payload.username)
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+
+    # En Windows "Ana" y "ana" serían la misma carpeta: se comparan sin mayúsculas.
+    existing = (
+        db.query(User).filter(func.lower(User.username) == payload.username.lower()).first()
+    )
     if existing:
         raise HTTPException(status_code=409, detail="Username already exists")
 
@@ -353,9 +396,10 @@ def delete_user(
             pass
         db.delete(photo)
 
-    # Limpia la carpeta del usuario si quedó vacía (o con solo subcarpetas vacías).
-    user_dir = Path(settings.storage_dir) / target.username
-    if user_dir.exists():
+    # Limpia la carpeta del usuario (ya sin fotos). Solo si es una subcarpeta
+    # directa de STORAGE_DIR: un nombre raro nunca puede borrar nada fuera.
+    user_dir = user_storage_dir(target.username)
+    if user_dir and user_dir.exists():
         shutil.rmtree(user_dir, ignore_errors=True)
 
     folder_ids = [f.id for f in db.query(Folder.id).filter(Folder.owner_id == target.id).all()]

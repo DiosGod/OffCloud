@@ -36,6 +36,9 @@ git -C $repo archive --format=tar -o $tar "${Version}:host"
 if ($LASTEXITCODE -ne 0) { throw "git archive falló" }
 tar -xf $tar -C $server
 Remove-Item $tar
+# start_server.bat es para desarrollo: en producción el server lo arranca la
+# tarea programada (deploy\run_server.bat). Si se lanzan los dos, chocan.
+Remove-Item (Join-Path $server "start_server.bat") -ErrorAction SilentlyContinue
 Set-Content -Path (Join-Path $server "VERSION") -Value $Version -Encoding ascii
 
 # venv propio del server.

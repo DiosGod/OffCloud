@@ -1,7 +1,8 @@
 import hashlib
+import os
 import re
 import shutil
-import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .auth import create_session, get_current_user, hash_password, require_admin, verify_password
@@ -111,7 +113,40 @@ def upload_photo(
     tmp_dir = storage_dir / "tmp"
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    tmp_path = tmp_dir / f"upload_{int(time.time() * 1000)}"
+    # Nombre único por subida: con un nombre basado en la hora, dos subidas en
+    # el mismo milisegundo escribían en el mismo archivo y se mezclaban.
+    tmp_path = tmp_dir / f"upload_{uuid.uuid4().hex}"
+    try:
+        return _store_upload(db, user, folder, file, tmp_path, storage_dir, device_id, taken_at)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def _find_existing(db: Session, user: User, file_hash: str) -> Photo | None:
+    return (
+        db.query(Photo)
+        .filter(Photo.owner_id == user.id, Photo.hash_sha256 == file_hash)
+        .first()
+    )
+
+
+def _already_exists(db: Session, folder: Folder | None, existing: Photo, file_hash: str) -> dict:
+    if folder:
+        link_photo_to_folder(db, folder, existing)
+        db.commit()
+    return {"status": "already_exists", "id": existing.id, "hash_sha256": file_hash}
+
+
+def _store_upload(
+    db: Session,
+    user: User,
+    folder: Folder | None,
+    file: UploadFile,
+    tmp_path: Path,
+    storage_dir: Path,
+    device_id: str | None,
+    taken_at: str | None,
+) -> dict:
     sha256 = hashlib.sha256()
     size_bytes = 0
     with tmp_path.open("wb") as buffer:
@@ -121,17 +156,9 @@ def upload_photo(
             buffer.write(chunk)
     file_hash = sha256.hexdigest()
 
-    existing = (
-        db.query(Photo)
-        .filter(Photo.owner_id == user.id, Photo.hash_sha256 == file_hash)
-        .first()
-    )
+    existing = _find_existing(db, user, file_hash)
     if existing:
-        tmp_path.unlink(missing_ok=True)
-        if folder:
-            link_photo_to_folder(db, folder, existing)
-            db.commit()
-        return {"status": "already_exists", "id": existing.id, "hash_sha256": file_hash}
+        return _already_exists(db, folder, existing, file_hash)
 
     parsed_taken_at = None
     if taken_at:
@@ -145,7 +172,10 @@ def upload_photo(
     dest_dir.mkdir(parents=True, exist_ok=True)
     ext = Path(file.filename).suffix
     dest_path = dest_dir / f"{file_hash}{ext}"
-    shutil.move(str(tmp_path), str(dest_path))
+    # Mismo volumen (tmp está dentro de la carpeta del usuario): os.replace es
+    # atómico. Si el destino ya existe es el mismo contenido (mismo hash).
+    if not dest_path.exists():
+        os.replace(tmp_path, dest_path)
 
     photo = Photo(
         owner_id=user.id,
@@ -157,7 +187,16 @@ def upload_photo(
         device_id=device_id,
     )
     db.add(photo)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        # La misma foto llegó dos veces a la vez y la otra subida la registró
+        # primero. El archivo en disco es idéntico (mismo hash), así que vale.
+        db.rollback()
+        existing = _find_existing(db, user, file_hash)
+        if existing is None:
+            raise
+        return _already_exists(db, folder, existing, file_hash)
     if folder:
         link_photo_to_folder(db, folder, photo)
     db.commit()

@@ -64,8 +64,11 @@ y la regla de firewall `OffCloud Server` (TCP 8000 solo desde `100.64.0.0/10`).
 
 ### Restaurar la BD desde un backup
 
-Parar la tarea, copiar el backup encima de `db\app.db` (y borrar
-`app.db-wal`/`app.db-shm` si existen) y volver a arrancarla.
+La BD va en modo WAL (desde v0.1.1): junto a `app.db` hay `app.db-wal` y
+`app.db-shm`, que forman parte de ella mientras el server corre. Para
+restaurar: parar la tarea, borrar `app.db`, `app.db-wal` y `app.db-shm`,
+copiar el backup como `db\app.db` y volver a arrancarla. Nunca copiar `app.db`
+a mano con el server en marcha: usar `deploy\backup_db.py`.
 
 ## Desarrollo
 

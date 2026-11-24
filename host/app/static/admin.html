@@ -279,7 +279,12 @@ async function api(path, options = {}) {
     showLogin('Tu sesión expiró o no tienes permisos. Inicia sesión de nuevo.');
     throw new Error('unauthorized');
   }
-  if (!res.ok) throw new Error('HTTP ' + res.status);
+  if (!res.ok) {
+    // El server explica el motivo en "detail" (p. ej. nombre de usuario no válido).
+    let detail = '';
+    try { detail = (await res.json()).detail; } catch (_) {}
+    throw new Error(typeof detail === 'string' && detail ? detail : 'HTTP ' + res.status);
+  }
   return res.status === 204 ? null : res.json();
 }
 
@@ -341,7 +346,7 @@ async function deleteUser(id, username, photoCount) {
     await api('/admin/users/' + id, { method: 'DELETE' });
     loadAll();
   } catch (e) {
-    alert('No se pudo borrar (¿intentaste borrar tu propio usuario?).');
+    alert('No se pudo borrar: ' + e.message);
   }
 }
 
@@ -371,7 +376,9 @@ async function createUser() {
     loadAll();
   } catch (e) {
     msgEl.className = 'msg error';
-    msgEl.textContent = 'No se pudo crear (¿nombre de usuario repetido?).';
+    msgEl.textContent = e.message === 'Username already exists'
+      ? 'Ya existe un usuario con ese nombre.'
+      : 'No se pudo crear: ' + e.message;
   }
 }
 

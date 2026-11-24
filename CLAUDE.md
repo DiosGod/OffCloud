@@ -228,7 +228,7 @@ No son tests pero hacen falta para producción: **copia de seguridad de las foto
 
 **Release v0.1.0 en la torre (2026-11-24)**
 - [x] Desplegado en `D:\OffCloud\server`; probado a mano en `127.0.0.1:8010`: health, login admin, `/admin`, carpeta, subida (la foto acabó en `D:\OffCloud\photos\admin\2020\05\`) y `backup_db.py` leyendo `DB_PATH` del `.env`. Datos de prueba borrados después.
-- [ ] `install_tasks.ps1` como administrador → al final dice "Server en línea".
+- [x] `install_tasks.ps1` como administrador (2026-11-24): tareas creadas y server en marcha; `http://offcloud:8000/health` responde. El script avisó "todavía no responde" porque solo espera 5 s y el primer arranque tardó algo más: no es un error.
 - [ ] Reiniciar la torre **sin iniciar sesión** → el móvil ve "Server en línea" (comprueba la tarea como SYSTEM y Tailscale unattended).
 - [ ] Al día siguiente hay un `app-*.db` en `D:\OffCloud\backups` y una línea "backup OK" en `logs\backup.log`.
 - [ ] Panel admin: crear un usuario con un nombre no válido (p. ej. `a/b`) muestra el error.

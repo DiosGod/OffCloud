@@ -43,11 +43,15 @@ Register-ScheduledTask -TaskName "OffCloud Backup DB" -Force -Action $action -Tr
     -Description "Copia diaria de app.db a $Root\backups (conserva 30)" | Out-Null
 
 Start-ScheduledTask -TaskName "OffCloud Server"
-Start-Sleep -Seconds 5
 Get-ScheduledTask -TaskName "OffCloud*" | Select-Object TaskName, State | Format-Table
-try {
-    $r = Invoke-RestMethod -Uri "http://localhost:8000/health" -TimeoutSec 10
-    Write-Host "Server en línea: $($r.status)"
-} catch {
-    Write-Warning "El server todavía no responde; revisa $Root\logs\server.log"
+# El primer arranque puede tardar unos segundos: se reintenta durante 30 s.
+$ok = $false
+for ($i = 0; $i -lt 15 -and -not $ok; $i++) {
+    Start-Sleep -Seconds 2
+    try {
+        $r = Invoke-RestMethod -Uri "http://localhost:8000/health" -TimeoutSec 5
+        Write-Host "Server en línea: $($r.status)"
+        $ok = $true
+    } catch {}
 }
+if (-not $ok) { Write-Warning "El server no responde tras 30 s; revisa $Root\logs\server.log" }
